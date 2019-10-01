@@ -1,0 +1,63 @@
+---
+- name: "Disable SELinux (CentOS)"
+  selinux:
+    state: disabled
+  when: ansible_distribution == "CentOS"
+
+- name: "Install required packages on CentOS "
+  yum:
+    name: "{{ item }}"
+    state: latest
+  with_items:
+    - unzip
+    - tar
+#    - btrfs-progs
+    - libseccomp
+    - util-linux
+    - socat
+    - libselinux-python
+    - containerd.io
+    
+- name: "Create a directory for containerd config"
+  file: path=/etc/containerd state=directory
+  
+- name: "Configure Containerd  "
+  shell: containerd config default > /etc/containerd/config.toml 
+      
+- name: "Start Containerd"
+  systemd: name=containerd daemon_reload=yes state=started enabled=yes
+
+- name: "Load br_netfilter and overlay kernel modules"
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - overlay
+    - br_netfilter
+    
+- name: "Set required modules that persist across reboots" 
+  sysctl: 
+    name: "{{ item }}"
+    value: 1
+    sysctl_file: /etc/sysctl.d/99-kubernetes-cri.conf
+    sysctl_set: yes
+  with_items:
+    - net.bridge.bridge-nf-call-iptables
+    - net.ipv4.ip_forward
+    - net.bridge.bridge-nf-call-ip6tables
+   
+- name: "Check kubelet args in kubelet config"
+  shell: grep "^Environment=\"KUBELET_EXTRA_ARGS=" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf || true
+    register: check_args
+      
+- name: "Add runtime args in kubelet conf"
+  lineinfile:
+    dest: "/etc/systemd/system/kubelet.service.d/10-kubeadm.conf"
+    line: "Environment=\"KUBELET_EXTRA_ARGS= --runtime-cgroups=/system.slice/containerd.service --container-runtime=remote --runtime-request-timeout=15m --container-runtime-endpoint=unix:///run/containerd/containerd.sock\""
+    insertafter: '\[Service\]'
+  when: check_args.stdout == ""
+  
+- name: "Restart Kubelet"
+  systemd: name=kubelet daemon_reload=yes state=restarted enabled=yes
+  
+  

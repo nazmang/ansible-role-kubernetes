@@ -21,7 +21,14 @@
   notify: restart kubelet
   with_items: "{{ kubernetes_packages }}"
 
-- include_tasks: docker-setup.yml
+- name: Include Docker configuration steps 
+  include_tasks: docker-setup.yml
+  when: kubernetes_cri_type == docker
+  
+- name: Include Containerd configuration steps 
+  include_tasks: containerd-setup.yml
+  when: kubernetes_cri_type == containerd
+  
 - include_tasks: kubelet-setup.yml
 
 - name: Disabling swap since Kubernetes can't work with swap enabled
