@@ -1,0 +1,20 @@
+---
+- name: Copy proper daemon.json
+  copy: 
+    src: "{{ role_path }}/files/etc/docker/daemon.json"
+    dest: /etc/docker/daemon.json
+    backup: yes
+
+- name: Creates necessary directories
+  file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+
+- name: Reload systemd daemon if template is changed.
+  systemd:
+    daemon_reload: true
+
+- name: Restart Docker service
+  service:
+    name: docker
+    state: restarted

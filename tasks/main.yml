@@ -1,0 +1,76 @@
+---
+- debug:
+    msg: "Current role is {{ kubernetes_role }}"   
+
+- name: Include OS-specific variables.
+  include_vars: "{{ ansible_os_family }}.yml"
+
+- include_tasks: setup-RedHat.yml
+  when: ansible_os_family == 'RedHat'
+
+- include_tasks: setup-Debian.yml
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure dependencies are installed.
+  package: name=curl state=present
+
+- name: Install Kubernetes packages.
+  package:
+    name: "{{ item.name | default(item) }}"
+    state: "{{ item.state | default('present') }}"
+  notify: restart kubelet
+  with_items: "{{ kubernetes_packages }}"
+
+- include_tasks: docker-setup.yml
+- include_tasks: kubelet-setup.yml
+
+- name: Disabling swap since Kubernetes can't work with swap enabled
+  shell: /sbin/swapoff -av 
+
+- name: Ensure kubelet is started and enabled at boot.
+  service:
+    name: kubelet
+    state: started
+    enabled: true
+
+- name: Check if Kubernetes has already been initialized.
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: kubernetes_init_stat
+#
+- shell: cat /proc/cgroups | grep -i 'memory' | awk '{print $4}'
+  register: cgroups_memory_enabled
+
+- name: Enable cgroups_memory in /boot/cmdline.txt  
+  lineinfile:
+    dest: /boot/cmdline.txt      
+    line: 'cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1'
+  when: cgroups_memory_enabled.stdout == '0' 
+
+- name: Check if CGROUPS_MEMORY enabled
+  fail:
+    msg: The CGROUPS_MEMORY is not enabled. Please enable it in /boot/cmdline.txt and reboot the system. 
+  when: cgroups_memory_enabled.stdout == '0' 
+
+# Set up master.
+- name: Include Master role tasks
+  include_tasks: master-setup.yml
+  when: kubernetes_role == 'master' 
+
+# Set up nodes.
+- name: Get the kubeadm join command from the Kubernetes master.
+  command: kubeadm token create --print-join-command
+  changed_when: false
+  when: kubernetes_role == 'master'
+  register: kubernetes_join_command_result
+
+- name: Set the kubeadm join command globally.
+  set_fact:
+    kubernetes_join_command: "{{ kubernetes_join_command_result.stdout }}"
+  when: kubernetes_join_command_result.stdout is defined
+  delegate_to: "{{ item }}"
+  delegate_facts: true
+  with_items: "{{ groups['all'] }}"
+
+- include_tasks: node-setup.yml
+  when: kubernetes_role == 'node'
